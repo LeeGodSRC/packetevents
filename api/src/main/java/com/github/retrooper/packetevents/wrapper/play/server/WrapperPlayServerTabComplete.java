@@ -21,7 +21,7 @@ package com.github.retrooper.packetevents.wrapper.play.server;
 import com.github.retrooper.packetevents.event.PacketSendEvent;
 import com.github.retrooper.packetevents.manager.server.ServerVersion;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
-import com.github.retrooper.packetevents.util.AdventureSerializer;
+import com.github.retrooper.packetevents.util.adventure.AdventureSerializer;
 import com.github.retrooper.packetevents.wrapper.PacketWrapper;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
@@ -126,12 +126,8 @@ public class WrapperPlayServerTabComplete extends PacketWrapper<WrapperPlayServe
         return transactionID;
     }
 
-    public void setTransactionId(Integer transactionID) {
-        if (transactionID != null) {
-            this.transactionID = Optional.of(transactionID);
-        } else {
-            this.transactionID = Optional.empty();
-        }
+    public void setTransactionId(@Nullable Integer transactionID) {
+        this.transactionID = Optional.ofNullable(transactionID);
     }
 
     public Optional<CommandRange> getCommandRange() {
@@ -139,11 +135,7 @@ public class WrapperPlayServerTabComplete extends PacketWrapper<WrapperPlayServe
     }
 
     public void setCommandRange(@Nullable CommandRange commandRange) {
-        if (commandRange != null) {
-            this.commandRange = Optional.of(commandRange);
-        } else {
-            this.commandRange = Optional.empty();
-        }
+        this.commandRange = Optional.ofNullable(commandRange);
     }
 
     public List<CommandMatch> getCommandMatches() {

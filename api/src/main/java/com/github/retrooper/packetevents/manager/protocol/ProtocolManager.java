@@ -20,7 +20,6 @@ package com.github.retrooper.packetevents.manager.protocol;
 
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.netty.channel.ChannelHelper;
-import com.github.retrooper.packetevents.protocol.ConnectionState;
 import com.github.retrooper.packetevents.protocol.ProtocolVersion;
 import com.github.retrooper.packetevents.protocol.player.ClientVersion;
 import com.github.retrooper.packetevents.protocol.player.User;
@@ -34,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public interface ProtocolManager {
     Map<UUID, Object> CHANNELS = new ConcurrentHashMap<>();
+    // Use SocketAddress because ProtocolLib wraps Channels with NettyChannelProxy class
     Map<Object, User> USERS = new ConcurrentHashMap<>();
 
     default Collection<User> getUsers() {
@@ -91,67 +91,69 @@ public interface ProtocolManager {
         }
     }
 
-    //TODO Make it clear that this only updates the connection state in our user.
-    //Sometimes you should use getInjector().changeConnectionState because that can allow the injector to make adjustments.
-    //This is very important, especially on Spigot.
-    //As soon as we switch to the play state on spigot, our injector makes some adjustments.
-    default void changeConnectionState(Object channel, ConnectionState connectionState) {
-        getUser(channel).setConnectionState(connectionState);
-    }
 
     default void setClientVersion(Object channel, ClientVersion version) {
         getUser(channel).setClientVersion(version);
     }
 
-    default Object[] transformWrappers(PacketWrapper<?> wrapper) {
+    default Object[] transformWrappers(PacketWrapper<?> wrapper, Object channel) {
         //It is possible that our packet transformer util decides to transform one wrapper into multiple packets.
         //(Correcting some mistakes on your end)
         PacketWrapper<?>[] wrappers = PacketTransformationUtil.transform(wrapper);
         Object[] buffers = new Object[wrappers.length];
         for (int i = 0; i < wrappers.length; i++) {
-            wrappers[i].prepareForSend();
+            wrappers[i].prepareForSend(channel);
             buffers[i] = wrappers[i].buffer;
+            // Fix race condition when sending packets to multiple people (due to when the buffer is freed)
+            wrappers[i].buffer = null;
         }
         return buffers;
     }
 
     default void sendPacket(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         sendPackets(channel, transformed);
     }
 
     default void sendPacketSilently(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         sendPacketsSilently(channel, transformed);
     }
 
     default void writePacket(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         writePackets(channel, transformed);
     }
 
     default void writePacketSilently(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         writePacketsSilently(channel, transformed);
     }
 
     default void receivePacket(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         receivePackets(channel, transformed);
     }
 
     default void receivePacketSilently(Object channel, PacketWrapper<?> wrapper) {
-        Object[] transformed = transformWrappers(wrapper);
+        Object[] transformed = transformWrappers(wrapper, channel);
         receivePacketsSilently(channel, transformed);
     }
 
     default User getUser(Object channel) {
-        return USERS.get(channel);
+        Object pipeline = ChannelHelper.getPipeline(channel);
+        return USERS.get(pipeline);
+    }
+
+    default User removeUser(Object channel) {
+        Object pipeline = ChannelHelper.getPipeline(channel);
+        return USERS.remove(pipeline);
     }
 
     default void setUser(Object channel, User user) {
         synchronized (channel) {
-            USERS.put(channel, user);
+            Object pipeline = ChannelHelper.getPipeline(channel);
+            USERS.put(pipeline, user);
         }
         PacketEvents.getAPI().getInjector().updateUser(channel, user);
     }

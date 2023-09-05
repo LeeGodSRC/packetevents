@@ -21,7 +21,6 @@ package io.github.retrooper.packetevents.injector;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.UserConnectEvent;
 import com.github.retrooper.packetevents.event.UserDisconnectEvent;
-import com.github.retrooper.packetevents.manager.protocol.ProtocolManager;
 import com.github.retrooper.packetevents.protocol.ConnectionState;
 import com.github.retrooper.packetevents.protocol.player.User;
 import com.github.retrooper.packetevents.protocol.player.UserProfile;
@@ -30,13 +29,13 @@ import io.github.retrooper.packetevents.handlers.PacketEventsEncoder;
 import io.netty.channel.Channel;
 
 public class ServerConnectionInitializer {
-    //This can be called on connection refactors. Not specifically on channel initialization,
+    // This can be called on connection refactors. Not specifically on channel initialization,
     public static void addChannelHandlers(Channel channel, PacketEventsDecoder decoder, PacketEventsEncoder encoder) {
         channel.pipeline().addBefore("packet-decoder", PacketEvents.DECODER_NAME, decoder);
         channel.pipeline().addBefore("packet-encoder", PacketEvents.ENCODER_NAME, encoder);
     }
 
-    //This is ONLY called whenever the connection starts.
+    // This is ONLY called whenever the connection starts.
     public static void initChannel(Channel channel, ConnectionState state) {
         User user = new User(channel, state, null, new UserProfile(null, null));
         UserConnectEvent connectEvent = new UserConnectEvent(user);
@@ -45,14 +44,16 @@ public class ServerConnectionInitializer {
             channel.unsafe().closeForcibly();
             return;
         }
-        ProtocolManager.USERS.put(channel, user);
         PacketEventsDecoder decoder = new PacketEventsDecoder(user);
         PacketEventsEncoder encoder = new PacketEventsEncoder(user);
+        //Order of these
         addChannelHandlers(channel, decoder, encoder);
+        //two methods is important.
+        PacketEvents.getAPI().getProtocolManager().setUser(channel, user);
     }
 
     public static void destroyChannel(Channel channel) {
-        User user = ProtocolManager.USERS.get(channel);
+        User user = PacketEvents.getAPI().getProtocolManager().getUser(channel);
         UserDisconnectEvent disconnectEvent = new UserDisconnectEvent(user);
         PacketEvents.getAPI().getEventManager().callEvent(disconnectEvent);
         channel.pipeline().remove(PacketEvents.DECODER_NAME);

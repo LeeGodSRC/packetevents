@@ -25,6 +25,7 @@ import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
 import com.github.retrooper.packetevents.protocol.item.ItemStack;
 import com.github.retrooper.packetevents.protocol.item.type.ItemType;
 import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
+import com.github.retrooper.packetevents.protocol.particle.type.ParticleType;
 import com.github.retrooper.packetevents.protocol.player.GameMode;
 import com.github.retrooper.packetevents.protocol.potion.PotionType;
 import com.github.retrooper.packetevents.protocol.potion.PotionTypes;
@@ -32,6 +33,7 @@ import com.github.retrooper.packetevents.protocol.world.Dimension;
 import com.github.retrooper.packetevents.protocol.world.Location;
 import com.github.retrooper.packetevents.protocol.world.states.WrappedBlockState;
 import org.bukkit.World;
+import org.bukkit.block.data.BlockData;
 
 public class SpigotConversionUtil {
     public static Location fromBukkitLocation(org.bukkit.Location location) {
@@ -56,6 +58,15 @@ public class SpigotConversionUtil {
 
     public static org.bukkit.GameMode toBukkitGameMode(GameMode gameMode) {
         return org.bukkit.GameMode.getByValue(gameMode.getId());
+    }
+
+    public static WrappedBlockState fromBukkitBlockData(BlockData blockData) {
+        String string = blockData.getAsString(false);
+        return WrappedBlockState.getByString(PacketEvents.getAPI().getServerManager().getVersion().toClientVersion(), string);
+    }
+
+    public static BlockData toBukkitBlockData(WrappedBlockState blockState) {
+        return org.bukkit.Bukkit.createBlockData(blockState.toString());
     }
 
     public static EntityType fromBukkitEntityType(org.bukkit.entity.EntityType entityType) {
@@ -95,13 +106,13 @@ public class SpigotConversionUtil {
         return bukkitStack.getType();
     }
 
-    public static WrappedBlockState fromBukkitBlockData(org.bukkit.material.MaterialData materialData) {
+    public static WrappedBlockState fromBukkitMaterialData(org.bukkit.material.MaterialData materialData) {
         int combinedID = SpigotReflectionUtil.getBlockDataCombinedId(materialData);
         ServerVersion serverVersion = PacketEvents.getAPI().getServerManager().getVersion();
         return WrappedBlockState.getByGlobalId(serverVersion.toClientVersion(), combinedID);
     }
 
-    public static org.bukkit.material.MaterialData toBukkitBlockData(WrappedBlockState state) {
+    public static org.bukkit.material.MaterialData toBukkitMaterialData(WrappedBlockState state) {
         return SpigotReflectionUtil.getBlockDataByCombinedId(state.getGlobalId());
     }
 
@@ -130,4 +141,13 @@ public class SpigotConversionUtil {
             return new Dimension(SpigotReflectionUtil.fromMinecraftNBT(nbt));
         }
     }
+
+    public static ParticleType fromBukkitParticle(Enum<?> particle) {
+        return SpigotReflectionUtil.toPacketEventsParticle(particle);
+    }
+
+    public static Enum<?> toBukkitParticle(ParticleType particle) {
+        return SpigotReflectionUtil.fromPacketEventsParticle(particle);
+    }
+
 }

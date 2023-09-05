@@ -32,6 +32,7 @@ import net.md_5.bungee.api.connection.ProxiedPlayer;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
+
 @ChannelHandler.Sharable
 public class PacketEventsDecoder extends MessageToMessageDecoder<ByteBuf> {
     public User user;
@@ -55,7 +56,9 @@ public class PacketEventsDecoder extends MessageToMessageDecoder<ByteBuf> {
                     packetReceiveEvent.getLastUsedWrapper().writeVarInt(packetReceiveEvent.getPacketId());
                     packetReceiveEvent.getLastUsedWrapper().write();
                 }
-                transformed.readerIndex(firstReaderIndex);
+                else {
+                    transformed.readerIndex(firstReaderIndex);
+                }
                 output.add(transformed.retain());
             }
             if (packetReceiveEvent.hasPostTasks()) {
@@ -77,9 +80,7 @@ public class PacketEventsDecoder extends MessageToMessageDecoder<ByteBuf> {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        //if (!ExceptionUtil.isExceptionContainedIn(cause, PacketEvents.getAPI().getNettyManager().getChannelOperator().getIgnoredHandlerExceptions())) {
-            super.exceptionCaught(ctx, cause);
-        //}
+        super.exceptionCaught(ctx, cause);
     }
 
     @Override

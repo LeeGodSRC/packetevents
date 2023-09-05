@@ -16,15 +16,35 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package com.github.retrooper.packetevents.util.reflection;
+package com.github.retrooper.packetevents.protocol.player;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.security.PublicKey;
+import java.time.Instant;
 
-public class ClassUtil {
-    private static final Map<Class<?>, String> CLASS_SIMPLE_NAME_CACHE = new ConcurrentHashMap<>();
+public class PublicProfileKey {
+    private final Instant expiresAt;
+    private final PublicKey key;
+    private final byte[] keySignature;
 
-    public static String getClassSimpleName(Class<?> cls) {
-        return CLASS_SIMPLE_NAME_CACHE.computeIfAbsent(cls, k -> cls.getSimpleName());
+    public PublicProfileKey(Instant expiresAt, PublicKey key, byte[] keySignature) {
+        this.expiresAt = expiresAt;
+        this.key = key;
+        this.keySignature = keySignature;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public PublicKey getKey() {
+        return key;
+    }
+
+    public byte[] getKeySignature() {
+        return keySignature;
+    }
+
+    public boolean hasExpired() {
+        return expiresAt.isBefore(Instant.now());
     }
 }

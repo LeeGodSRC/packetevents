@@ -59,14 +59,14 @@ public class WrapperPlayServerChunkData extends PacketWrapper<WrapperPlayServerC
     // 1.18 only (lighting) - for writing data
     // TODO: Make accessible?? Include in chunk data?? What do we do with this?
     private boolean trustEdges;
-    private BitSet blockLightMask;
-    private BitSet skyLightMask;
-    private BitSet emptyBlockLightMask;
-    private BitSet emptySkyLightMask;
+    private BitSet blockLightMask = new BitSet();
+    private BitSet skyLightMask = new BitSet();
+    private BitSet emptyBlockLightMask = new BitSet();
+    private BitSet emptySkyLightMask = new BitSet();
     private int skyLightCount;
     private  int blockLightCount;
-    private byte[][] skyLightArray;
-    private byte[][] blockLightArray;
+    private byte[][] skyLightArray = new byte[0][0];
+    private byte[][] blockLightArray = new byte[0][0];
 
     public WrapperPlayServerChunkData(PacketSendEvent event) {
         super(event);
@@ -175,11 +175,11 @@ public class WrapperPlayServerChunkData extends PacketWrapper<WrapperPlayServerC
 
         boolean hasBlocklight = (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_16) || serverVersion.isOlderThan(ServerVersion.V_1_14))
                 && !serverVersion.isOlderThanOrEquals(ServerVersion.V_1_8_8);
-        boolean checkForSky = serverVersion.isNewerThanOrEquals(ServerVersion.V_1_16) || serverVersion.isOlderThanOrEquals(ServerVersion.V_1_8_8);
+        boolean checkForSky = serverVersion.isNewerThanOrEquals(ServerVersion.V_1_16) || serverVersion.isOlderThanOrEquals(ServerVersion.V_1_8_8) || user.getDimension().getId() == 0;
 
         // 1.7/1.8 don't use this NetStreamInput
         NetStreamInput dataIn = serverVersion.isNewerThanOrEquals(ServerVersion.V_1_9) ? new NetStreamInput(new ByteArrayInputStream(data)) : null;
-        BaseChunk[] chunks = getChunkReader().read(chunkMask, secondaryChunkMask, fullChunk, hasBlocklight, checkForSky, chunkSize, data, dataIn);
+        BaseChunk[] chunks = getChunkReader().read(user.getDimension(), chunkMask, secondaryChunkMask, fullChunk, hasBlocklight, checkForSky, chunkSize, data, dataIn);
 
         if (hasBiomeData && serverVersion.isOlderThan(ServerVersion.V_1_15)) {
             if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_13)) { // Uses ints
@@ -214,7 +214,9 @@ public class WrapperPlayServerChunkData extends PacketWrapper<WrapperPlayServerC
         }
 
         if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_18)) {
-            trustEdges = readBoolean();
+            if (serverVersion.isOlderThanOrEquals(ServerVersion.V_1_19_4)) {
+                trustEdges = readBoolean();
+            }
 
             skyLightMask = readChunkMask();
             blockLightMask = readChunkMask();
@@ -434,7 +436,9 @@ public class WrapperPlayServerChunkData extends PacketWrapper<WrapperPlayServerC
         }
 
         if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_18)) {
-            writeBoolean(trustEdges);
+            if (serverVersion.isOlderThanOrEquals(ServerVersion.V_1_19_4)) {
+                writeBoolean(trustEdges);
+            }
             writeChunkMask(skyLightMask);
             writeChunkMask(blockLightMask);
             writeChunkMask(emptySkyLightMask);

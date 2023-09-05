@@ -21,23 +21,25 @@ package io.github.retrooper.packetevents.factory.spigot;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.PacketEventsAPI;
 import com.github.retrooper.packetevents.injector.ChannelInjector;
-import com.github.retrooper.packetevents.manager.InternalPacketListener;
 import com.github.retrooper.packetevents.manager.player.PlayerManager;
 import com.github.retrooper.packetevents.manager.protocol.ProtocolManager;
 import com.github.retrooper.packetevents.manager.server.ServerManager;
 import com.github.retrooper.packetevents.netty.NettyManager;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
+import com.github.retrooper.packetevents.protocol.player.User;
 import com.github.retrooper.packetevents.settings.PacketEventsSettings;
 import com.github.retrooper.packetevents.util.LogManager;
-import com.github.retrooper.packetevents.util.PEVersion;
 import io.github.retrooper.packetevents.bstats.Metrics;
 import io.github.retrooper.packetevents.bukkit.InternalBukkitListener;
 import io.github.retrooper.packetevents.injector.SpigotChannelInjector;
+import io.github.retrooper.packetevents.injector.connection.ServerConnectionInitializer;
+import io.github.retrooper.packetevents.manager.InternalBukkitPacketListener;
 import io.github.retrooper.packetevents.manager.player.PlayerManagerImpl;
 import io.github.retrooper.packetevents.manager.protocol.ProtocolManagerImpl;
 import io.github.retrooper.packetevents.manager.server.ServerManagerImpl;
 import io.github.retrooper.packetevents.netty.NettyManagerImpl;
 import io.github.retrooper.packetevents.util.BukkitLogManager;
+import io.github.retrooper.packetevents.util.FoliaCompatUtil;
 import io.github.retrooper.packetevents.util.SpigotReflectionUtil;
 import io.github.retrooper.packetevents.util.protocolsupport.ProtocolSupportUtil;
 import io.github.retrooper.packetevents.util.viaversion.CustomPipelineUtil;
@@ -117,7 +119,7 @@ public class SpigotPacketEventsBuilder {
 
                     //Register internal packet listener (should be the first listener)
                     //This listener doesn't do any modifications to the packets, just reads data
-                    getEventManager().registerListener(new InternalPacketListener());
+                    getEventManager().registerListener(new InternalBukkitPacketListener());
                 }
             }
 
@@ -138,41 +140,29 @@ public class SpigotPacketEventsBuilder {
                     if (settings.isbStatsEnabled()) {
                         Metrics metrics = new Metrics((JavaPlugin) plugin, 11327);
                         //Just to have an idea what versions of packetevents people use
+                        //TODO UPDATE
+                        boolean snapshot = false;
                         metrics.addCustomChart(new Metrics.SimplePie("packetevents_version", () -> {
-                            return getVersion().toString() + "-beta";//TODO Cut off "-beta" once 2.0 releases
+                            return getVersion().toString() + (snapshot ? "-SNAPSHOT" : "");//TODO Cut off "-beta" once 2.0 releases
                         }));
                     }
-                    Bukkit.getPluginManager().registerEvents(new InternalBukkitListener(),
-                            plugin);
-                    //TODO Clean up and remove redundant post inject task? or is it?
-                    Runnable postInjectTask = () -> {
-                        /*for (final Player p : Bukkit.getOnlinePlayers()) {
-                            try {
-                                Object channel = PacketEvents.getAPI().getPlayerManager().getChannel(p);
-                                User user = PacketEvents.getAPI().getPlayerManager().getUser(p);
-                                injector.updatePlayer(user, p);
-                                getEventManager().callEvent(new UserLoginEvent(user, p));
-                            } catch (Exception ex) {
-                                p.kickPlayer("Failed to inject... Please rejoin!");
-                                ex.printStackTrace();
-                            }
-                        }*/
-                    };
+
+                    Bukkit.getPluginManager().registerEvents(new InternalBukkitListener(plugin), plugin);
 
                     if (lateBind) {
                         //If late-bind is enabled, we still need to inject (after all plugins enabled).
                         Runnable lateBindTask = () -> {
                             if (injector.isServerBound()) {
                                 injector.inject();
-                                postInjectTask.run();
                             }
                         };
-                        Bukkit.getScheduler().scheduleSyncDelayedTask(plugin, lateBindTask);
-                    } else {
-                        postInjectTask.run();
+                        FoliaCompatUtil.runTaskOnInit(plugin, lateBindTask);
                     }
 
-                    checkCompatibility();
+                    // Let people override this, at their own risk
+                    if (!"true".equalsIgnoreCase(System.getenv("PE_IGNORE_INCOMPATIBILITY"))) {
+                        checkCompatibility();
+                    }
                 }
             }
 
@@ -180,32 +170,18 @@ public class SpigotPacketEventsBuilder {
                 // PacketEvents is now enabled, we can now check
                 ViaVersionUtil.checkIfViaIsPresent();
                 ProtocolSupportUtil.checkIfProtocolSupportIsPresent();
-                //If ProtocolSupport is present, it needs to be x or newer
-                Plugin protocolSupportPlugin = Bukkit.getPluginManager().getPlugin("ProtocolSupport");
-                if (protocolSupportPlugin != null) {
-                    String psVersionString = protocolSupportPlugin.getDescription().getVersion().split("-")[0];
-                    PEVersion psVersion;
-                    try {
-                        psVersion = new PEVersion(psVersionString);
-                    }
-                    catch (Exception ex) {
+                //If ViaVersion is present, it must be 4.5.0 or higher
+                Plugin viaPlugin = Bukkit.getPluginManager().getPlugin("ViaVersion");
+                if (viaPlugin != null) {
+                    String[] ver = viaPlugin.getDescription().getVersion().split("\\.", 3);
+                    int major = Integer.parseInt(ver[0]);
+                    int minor = Integer.parseInt(ver[1]);
+                    if (major < 4 || major == 4 && minor < 5) {
                         PacketEvents.getAPI().getLogManager().severe("You are attempting to combine 2.0 PacketEvents with a " +
-                                "ProtocolSupport version older than v1.18.1-1. (Failed to parse the ProtocolSupport version)" +
-                                "This is no longer works, please update to a newer build. " +
-                                "https://www.spigotmc.org/resources/protocolsupport.7201/");
+                                "ViaVersion older than 4.5.0, please update your ViaVersion!");
                         Plugin ourPlugin = getPlugin();
                         Bukkit.getPluginManager().disablePlugin(ourPlugin);
-                        throw new IllegalStateException("ProtocolSupport incompatibility! Update to v1.18.1-1 or newer!");
-                    }
-                    PEVersion minimumPSVersion = new PEVersion(1, 18, 1);
-                    if (psVersion.isOlderThan(minimumPSVersion)) {
-                        PacketEvents.getAPI().getLogManager().severe("You are attempting to combine 2.0 PacketEvents with a " +
-                                "ProtocolSupport version older than v1.18.1-1. (" + psVersion.toString() + ") " +
-                                "This is no longer works, please update to a newer build. " +
-                                "https://www.spigotmc.org/resources/protocolsupport.7201/");
-                        Plugin ourPlugin = getPlugin();
-                        Bukkit.getPluginManager().disablePlugin(ourPlugin);
-                        throw new IllegalStateException("ProtocolSupport incompatibility! Update to v1.18.1-1 or newer!");
+                        throw new IllegalStateException("ViaVersion incompatibility! Update to v4.5.0 or newer!");
                     }
                 }
                 //If ProtocolLib is present, it needs to be v5.0.0 or newer
@@ -234,6 +210,9 @@ public class SpigotPacketEventsBuilder {
                 if (initialized.getAndSet(false)) {
                     //Uninject the injector if needed(depends on the injector implementation)
                     injector.uninject();
+                    for (User user : ProtocolManager.USERS.values()) {
+                        ServerConnectionInitializer.destroyHandlers(user.getChannel());
+                    }
                     //Unregister all listeners. Because if we attempt to reload, we will end up with duplicate listeners.
                     getEventManager().unregisterAllListeners();
                 }

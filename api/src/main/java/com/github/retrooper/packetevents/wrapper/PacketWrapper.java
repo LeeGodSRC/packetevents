@@ -25,10 +25,11 @@ import com.github.retrooper.packetevents.event.ProtocolPacketEvent;
 import com.github.retrooper.packetevents.manager.server.ServerVersion;
 import com.github.retrooper.packetevents.manager.server.VersionComparison;
 import com.github.retrooper.packetevents.netty.buffer.ByteBufHelper;
-import com.github.retrooper.packetevents.netty.buffer.UnpooledByteBufAllocationHelper;
-import com.github.retrooper.packetevents.protocol.chat.LastSeenMessages;
+import com.github.retrooper.packetevents.netty.channel.ChannelHelper;
+import com.github.retrooper.packetevents.protocol.chat.*;
 import com.github.retrooper.packetevents.protocol.chat.filter.FilterMask;
 import com.github.retrooper.packetevents.protocol.chat.filter.FilterMaskType;
+import com.github.retrooper.packetevents.protocol.chat.message.ChatMessage_v1_19_1;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataType;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
@@ -41,15 +42,15 @@ import com.github.retrooper.packetevents.protocol.nbt.codec.NBTCodec;
 import com.github.retrooper.packetevents.protocol.packettype.PacketTypeCommon;
 import com.github.retrooper.packetevents.protocol.player.ClientVersion;
 import com.github.retrooper.packetevents.protocol.player.GameMode;
+import com.github.retrooper.packetevents.protocol.player.PublicProfileKey;
 import com.github.retrooper.packetevents.protocol.player.User;
 import com.github.retrooper.packetevents.protocol.recipe.data.MerchantOffer;
 import com.github.retrooper.packetevents.protocol.world.Dimension;
-import com.github.retrooper.packetevents.protocol.world.DimensionType;
 import com.github.retrooper.packetevents.protocol.world.WorldBlockPosition;
 import com.github.retrooper.packetevents.resources.ResourceLocation;
-import com.github.retrooper.packetevents.util.AdventureSerializer;
 import com.github.retrooper.packetevents.util.StringUtil;
 import com.github.retrooper.packetevents.util.Vector3i;
+import com.github.retrooper.packetevents.util.adventure.AdventureSerializer;
 import com.github.retrooper.packetevents.util.crypto.MinecraftEncryptionUtil;
 import com.github.retrooper.packetevents.util.crypto.SaltSignature;
 import com.github.retrooper.packetevents.util.crypto.SignatureData;
@@ -140,11 +141,11 @@ public class PacketWrapper<T extends PacketWrapper> {
         return wrapper;
     }
 
-    public final void prepareForSend() {
+    public final void prepareForSend(Object channel) {
         // Null means the packet was manually created and wasn't sent by the server itself
         // A reference count of 0 means that the packet was freed (it was already sent)
         if (buffer == null || ByteBufHelper.refCnt(buffer) == 0) {
-            buffer = UnpooledByteBufAllocationHelper.buffer();
+            buffer = ChannelHelper.pooledByteBuf(channel);
         }
 
         writeVarInt(packetID);
@@ -341,14 +342,11 @@ public class PacketWrapper<T extends PacketWrapper> {
                 writeNBT(itemStack.getNBT());
             }
         } else {
-            int typeID;
             if (itemStack.isEmpty()) {
-                typeID = -1;
+                writeShort(-1);
             } else {
-                typeID = itemStack.getType().getId(serverVersion.toClientVersion());
-            }
-            writeShort(typeID);
-            if (typeID >= 0) {
+                int typeID = itemStack.getType().getId(serverVersion.toClientVersion());
+                writeShort(typeID);
                 writeByte(itemStack.getAmount());
                 writeShort(itemStack.getLegacyData());
                 writeNBT(itemStack.getNBT());
@@ -660,13 +658,16 @@ public class PacketWrapper<T extends PacketWrapper> {
             while ((index = readUnsignedByte()) != 255) {
                 int typeID = v1_10 ? readVarInt() : readUnsignedByte();
                 EntityDataType<?> type = EntityDataTypes.getById(serverVersion.toClientVersion(), typeID);
+                if (type == null) {
+                    throw new IllegalStateException("Unknown entity metadata type id: " + typeID + " version " + serverVersion.toClientVersion());
+                }
                 Object value = type.getDataDeserializer().apply(this);
                 list.add(new EntityData(index, type, value));
             }
         } else {
-            for (byte data = readByte(); data != 127; data = readByte()) {
-                int typeID = (data & 224) >> 5;
-                int index = data & 31;
+            for (byte data = readByte(); data != Byte.MAX_VALUE; data = readByte()) {
+                int typeID = (data & 0xE0) >> 5;
+                int index = data & 0x1F;
                 EntityDataType<?> type = EntityDataTypes.getById(serverVersion.toClientVersion(), typeID);
                 Object value = type.getDataDeserializer().apply(this);
                 EntityData entityData = new EntityData(index, type, value);
@@ -677,6 +678,9 @@ public class PacketWrapper<T extends PacketWrapper> {
     }
 
     public void writeEntityMetadata(List<EntityData> list) {
+        if (list == null) {
+            list = new ArrayList<>();
+        }
         if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_9)) {
             boolean v1_10 = serverVersion.isNewerThanOrEquals(ServerVersion.V_1_10);
             for (EntityData entityData : list) {
@@ -722,12 +726,34 @@ public class PacketWrapper<T extends PacketWrapper> {
     }
 
     public SaltSignature readSaltSignature() {
-        return new SaltSignature(readLong(), readByteArray());
+        long salt = readLong();
+        byte[] signature;
+        //1.19.3+
+        if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_19_3)) {
+            //Read optional signature
+            if (readBoolean()) {
+                signature = readBytes(256);
+            } else {
+                signature = new byte[0];
+            }
+        } else {
+            signature = readByteArray(256);
+        }
+        return new SaltSignature(salt, signature);
     }
 
     public void writeSaltSignature(SaltSignature signature) {
         writeLong(signature.getSalt());
-        writeByteArray(signature.getSignature());
+        if (serverVersion.isNewerThanOrEquals(ServerVersion.V_1_19_3)) {
+            boolean present = signature.getSignature().length != 0;
+            writeBoolean(present);
+            if (present) {
+                writeBytes(signature.getSignature());
+            }
+
+        } else {
+            writeByteArray(signature.getSignature());
+        }
     }
 
     public PublicKey readPublicKey() {
@@ -736,6 +762,28 @@ public class PacketWrapper<T extends PacketWrapper> {
 
     public void writePublicKey(PublicKey publicKey) {
         writeByteArray(publicKey.getEncoded());
+    }
+
+    public PublicProfileKey readPublicProfileKey() {
+        Instant expiresAt = readTimestamp();
+        PublicKey key = readPublicKey();
+        byte[] keySignature = readByteArray(4096);
+        return new PublicProfileKey(expiresAt, key, keySignature);
+    }
+
+    public void writePublicProfileKey(PublicProfileKey key) {
+        writeTimestamp(key.getExpiresAt());
+        writePublicKey(key.getKey());
+        writeByteArray(key.getKeySignature());
+    }
+
+    public RemoteChatSession readRemoteChatSession() {
+        return new RemoteChatSession(readUUID(), readPublicProfileKey());
+    }
+
+    public void writeRemoteChatSession(RemoteChatSession chatSession) {
+        writeUUID(chatSession.getSessionId());
+        writePublicProfileKey(chatSession.getPublicProfileKey());
     }
 
     public Instant readTimestamp() {
@@ -784,14 +832,50 @@ public class PacketWrapper<T extends PacketWrapper> {
     }
 
     public LastSeenMessages.Update readLastSeenMessagesUpdate() {
-       LastSeenMessages lastSeenMessages = readLastSeenMessages();
-        LastSeenMessages.Entry lastReceived = readOptional(PacketWrapper::readLastSeenMessagesEntry);
-        return new LastSeenMessages.Update(lastSeenMessages, lastReceived);
+        int signedMessages = readVarInt();
+        BitSet seen = BitSet.valueOf(readBytes(3));
+        return new LastSeenMessages.Update(signedMessages, seen);
     }
 
     public void writeLastSeenMessagesUpdate(LastSeenMessages.Update update) {
-        writeLastSeenMessages(update.getLastSeenMessages());
-        writeOptional(update.getLastReceived(), PacketWrapper::writeLastMessagesEntry);
+        writeVarInt(update.getOffset());
+        byte[] lastSeen = Arrays.copyOf(update.getAcknowledged().toByteArray(), 3);
+        writeBytes(lastSeen);
+    }
+
+    public LastSeenMessages.LegacyUpdate readLegacyLastSeenMessagesUpdate() {
+        LastSeenMessages lastSeenMessages = readLastSeenMessages();
+        LastSeenMessages.Entry lastReceived = readOptional(PacketWrapper::readLastSeenMessagesEntry);
+        return new LastSeenMessages.LegacyUpdate(lastSeenMessages, lastReceived);
+    }
+
+    public void writeLegacyLastSeenMessagesUpdate(LastSeenMessages.LegacyUpdate legacyUpdate) {
+        writeLastSeenMessages(legacyUpdate.getLastSeenMessages());
+        writeOptional(legacyUpdate.getLastReceived(), PacketWrapper::writeLastMessagesEntry);
+    }
+
+    public MessageSignature.Packed readMessageSignaturePacked() {
+        int id = readVarInt() - 1;
+        if (id == -1) {
+            return new MessageSignature.Packed(new MessageSignature(readBytes(256)));
+        }
+        return new MessageSignature.Packed(id);
+    }
+
+    public void writeMessageSignaturePacked(MessageSignature.Packed messageSignaturePacked) {
+        writeVarInt(messageSignaturePacked.getId() + 1);
+        if (messageSignaturePacked.getFullSignature().isPresent()) {
+            writeBytes(messageSignaturePacked.getFullSignature().get().getBytes());
+        }
+    }
+
+    public LastSeenMessages.Packed readLastSeenMessagesPacked() {
+        List<MessageSignature.Packed> packedMessageSignatures = readCollection(limitValue(ArrayList::new, 20), PacketWrapper::readMessageSignaturePacked);
+        return new LastSeenMessages.Packed(packedMessageSignatures);
+    }
+
+    public void writeLastSeenMessagesPacked(LastSeenMessages.Packed lastSeenMessagesPacked) {
+        writeCollection(lastSeenMessagesPacked.getPackedMessageSignatures(), PacketWrapper::writeMessageSignaturePacked);
     }
 
     public LastSeenMessages readLastSeenMessages() {
@@ -802,6 +886,17 @@ public class PacketWrapper<T extends PacketWrapper> {
 
     public void writeLastSeenMessages(LastSeenMessages lastSeenMessages) {
         writeCollection(lastSeenMessages.getEntries(), PacketWrapper::writeLastMessagesEntry);
+    }
+
+    public List<SignedCommandArgument> readSignedCommandArguments() {
+        return readCollection(ArrayList::new, (_packet) -> new SignedCommandArgument(readString(), readByteArray()));
+    }
+
+    public void writeSignedCommandArguments(List<SignedCommandArgument> signedArguments) {
+        writeCollection(signedArguments, (_packet, argument) -> {
+            writeString(argument.getArgument());
+            writeByteArray(argument.getSignature());
+        });
     }
 
     public BitSet readBitSet() {
@@ -869,6 +964,72 @@ public class PacketWrapper<T extends PacketWrapper> {
         writeInt(data.getDemand());
     }
 
+    public ChatMessage_v1_19_1.ChatTypeBoundNetwork readChatTypeBoundNetwork() {
+        int id = readVarInt();
+        ChatType type = ChatTypes.getById(getServerVersion().toClientVersion(), id);
+        Component name = readComponent();
+        Component targetName = readOptional(PacketWrapper::readComponent);
+        return new ChatMessage_v1_19_1.ChatTypeBoundNetwork(type, name, targetName);
+    }
+
+    public void writeChatTypeBoundNetwork(ChatMessage_v1_19_1.ChatTypeBoundNetwork chatType) {
+        writeVarInt(chatType.getType().getId(getServerVersion().toClientVersion()));
+        writeComponent(chatType.getName());
+        writeOptional(chatType.getTargetName(), PacketWrapper::writeComponent);
+    }
+
+    public Node readNode() {
+        byte flags = readByte();
+        int nodeType = flags & 0x03; // 0: root, 1: literal, 2: argument
+        boolean hasRedirect = (flags & 0x08) != 0;
+        boolean hasSuggestionsType = nodeType == 2 && ((flags & 0x10) != 0);
+
+        List<Integer> children = readList(PacketWrapper::readVarInt);
+
+        Integer redirectNodeIndex = hasRedirect ? readVarInt() : null;
+        String name = nodeType == 1 || nodeType == 2 ? readString() : null;
+        Integer parserID = nodeType == 2 ? readVarInt() : null;
+        List<Object> properties = nodeType == 2 ? Parsers.getParsers().get(parserID).readProperties(this).orElse(null) : null;
+        ResourceLocation suggestionType = hasSuggestionsType ? readIdentifier() : null;
+
+        return new Node(flags, children, redirectNodeIndex, name, parserID, properties, suggestionType);
+    }
+
+    public void writeNode(Node node) {
+        writeByte(node.getFlags());
+        writeList(node.getChildren(), PacketWrapper::writeVarInt);
+        node.getRedirectNodeIndex().ifPresent(this::writeVarInt);
+        node.getName().ifPresent(this::writeString);
+        node.getParserID().ifPresent(this::writeVarInt);
+        if (node.getProperties().isPresent())
+            Parsers.getParsers().get(node.getParserID().get()).writeProperties(this, node.getProperties().get());
+        node.getSuggestionsType().ifPresent(this::writeIdentifier);
+    }
+
+    public <T extends Enum<T>> EnumSet<T> readEnumSet(Class<T> enumClazz) {
+        T[] values = enumClazz.getEnumConstants();
+        byte[] bytes = new byte[-Math.floorDiv(-values.length, 8)];
+        ByteBufHelper.readBytes(getBuffer(), bytes);
+        BitSet bitSet = BitSet.valueOf(bytes);
+        EnumSet<T> set = EnumSet.noneOf(enumClazz);
+        for (int i = 0; i < values.length; i++) {
+            if (bitSet.get(i)) {
+                set.add(values[i]);
+            }
+        }
+        return set;
+    }
+
+    public <T extends Enum<T>> void writeEnumSet(EnumSet<T> set, Class<T> enumClazz) {
+        T[] values = enumClazz.getEnumConstants();
+        BitSet bitSet = new BitSet(values.length);
+        for (int i = 0; i < values.length; i++) {
+            if (set.contains(values[i])) {
+                bitSet.set(i);
+            }
+        }
+        writeBytes(Arrays.copyOf(bitSet.toByteArray(), -Math.floorDiv(-values.length, 8)));
+    }
 
     @Experimental
     public <U, V, R> U readMultiVersional(VersionComparison version, ServerVersion target, Reader<V> first, Reader<R> second) {

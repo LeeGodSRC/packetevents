@@ -5,6 +5,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,6 +33,22 @@ public class LastSeenMessages {
         return entries;
     }
 
+    public static class Packed {
+        private List<MessageSignature.Packed> packedMessageSignatures;
+
+        public Packed(List<MessageSignature.Packed> packedMessageSignatures) {
+            this.packedMessageSignatures = packedMessageSignatures;
+        }
+
+        public List<MessageSignature.Packed> getPackedMessageSignatures() {
+            return packedMessageSignatures;
+        }
+
+        public void setPackedMessageSignatures(List<MessageSignature.Packed> packedMessageSignatures) {
+            this.packedMessageSignatures = packedMessageSignatures;
+        }
+    }
+
     public static class Entry {
         private final UUID uuid;
         private final byte[] signature;
@@ -50,11 +67,11 @@ public class LastSeenMessages {
         }
     }
 
-    public static class Update {
+    public static class LegacyUpdate {
         private final LastSeenMessages lastSeenMessages;
         private final @Nullable Entry lastReceived;
 
-        public Update(LastSeenMessages lastSeenMessages, @Nullable Entry lastReceived) {
+        public LegacyUpdate(LastSeenMessages lastSeenMessages, @Nullable Entry lastReceived) {
             this.lastSeenMessages = lastSeenMessages;
             this.lastReceived = lastReceived;
         }
@@ -65,6 +82,24 @@ public class LastSeenMessages {
 
         public @Nullable Entry getLastReceived() {
             return lastReceived;
+        }
+    }
+
+    public static class Update {
+        private final int offset;
+        private final BitSet acknowledged;
+
+        public Update(int offset, BitSet acknowledged) {
+            this.offset = offset;
+            this.acknowledged = acknowledged;
+        }
+
+        public int getOffset() {
+            return offset;
+        }
+
+        public BitSet getAcknowledged() {
+            return acknowledged;
         }
     }
 }

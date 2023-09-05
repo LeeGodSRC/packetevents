@@ -16,13 +16,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package com.github.retrooper.packetevents.protocol.entity.data.provider;
+package com.github.retrooper.packetevents.protocol.chat;
 
-import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
+import com.github.retrooper.packetevents.protocol.player.PublicProfileKey;
 
-import java.util.List;
+import java.util.UUID;
 
-public interface DataProvider {
-    List<EntityData> encode();
-    void decode(List<EntityData> data);
+public class RemoteChatSession {
+    private final UUID sessionId;
+    private final PublicProfileKey publicProfileKey;
+
+    public RemoteChatSession(UUID sessionId, PublicProfileKey publicProfileKey) {
+        this.sessionId = sessionId;
+        this.publicProfileKey = publicProfileKey;
+    }
+
+    public UUID getSessionId() {
+        return sessionId;
+    }
+
+    public PublicProfileKey getPublicProfileKey() {
+        return publicProfileKey;
+    }
 }

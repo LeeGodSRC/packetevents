@@ -18,123 +18,162 @@
 
 package io.github.retrooper.packetevents.injector.handlers;
 
+import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketSendEvent;
+import com.github.retrooper.packetevents.exception.CancelPacketException;
+import com.github.retrooper.packetevents.exception.InvalidDisconnectPacketSend;
 import com.github.retrooper.packetevents.exception.PacketProcessException;
+import com.github.retrooper.packetevents.netty.buffer.ByteBufHelper;
 import com.github.retrooper.packetevents.protocol.ConnectionState;
 import com.github.retrooper.packetevents.protocol.player.User;
+import com.github.retrooper.packetevents.util.EventCreationUtil;
 import com.github.retrooper.packetevents.util.ExceptionUtil;
 import com.github.retrooper.packetevents.util.PacketEventsImplHelper;
-import io.github.retrooper.packetevents.util.SpigotReflectionUtil;
+import com.github.retrooper.packetevents.wrapper.PacketWrapper;
+import io.github.retrooper.packetevents.injector.connection.ServerConnectionInitializer;
 import io.github.retrooper.packetevents.util.viaversion.CustomPipelineUtil;
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.EncoderException;
-import io.netty.handler.codec.MessageToByteEncoder;
-import io.netty.util.ReferenceCountUtil;
+import io.netty.handler.codec.MessageToMessageEncoder;
 import org.bukkit.entity.Player;
 
-import java.util.ArrayList;
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 
-@ChannelHandler.Sharable
-public class PacketEventsEncoder extends MessageToByteEncoder<Object> {
+public class PacketEventsEncoder extends MessageToMessageEncoder<ByteBuf> {
     public User user;
-    public volatile Player player;
-    public MessageToByteEncoder<?> vanillaEncoder;
-    public final List<Runnable> queuedPostTasks = new ArrayList<>();
+    public Player player;
+    private boolean handledCompression = COMPRESSION_ENABLED_EVENT != null;
+    private ChannelPromise promise;
+    public static final Object COMPRESSION_ENABLED_EVENT = paperCompressionEnabledEvent();
 
     public PacketEventsEncoder(User user) {
         this.user = user;
     }
 
+    public PacketEventsEncoder(ChannelHandler encoder) {
+        user = ((PacketEventsEncoder) encoder).user;
+        player = ((PacketEventsEncoder) encoder).player;
+        handledCompression = ((PacketEventsEncoder) encoder).handledCompression;
+        promise = ((PacketEventsEncoder) encoder).promise;
+    }
+
     @Override
-    protected void encode(ChannelHandlerContext ctx, Object o, ByteBuf out) throws Exception {
-        if (!(o instanceof ByteBuf)) {
-            //Convert NMS object to bytes, so we can process it right away.
-            if (vanillaEncoder == null) return;
-            try {
-                CustomPipelineUtil.callEncode(vanillaEncoder, ctx, o, out);
-            }
-            catch (Exception ex) {
-                if (ex.getCause() instanceof Exception) {
-                    throw (Exception) ex.getCause();
-                }
-                else if (ex.getCause() instanceof Error) {
-                    throw (Error) ex.getCause();
-                }
-            }
-            //Failed to translate it into ByteBuf form (which we can process)
-            if (!out.isReadable()) return;
-        } else {
-            ByteBuf in = (ByteBuf) o;
-            //Empty packets?
-            if (!in.isReadable()) return;
-            out.writeBytes(in);
+    protected void encode(ChannelHandlerContext ctx, ByteBuf byteBuf, List<Object> list) throws Exception {
+        boolean needsRecompression = !handledCompression && handleCompression(ctx, byteBuf);
+        handleClientBoundPacket(ctx.channel(), user, player, byteBuf, this.promise);
+
+        if (needsRecompression) {
+            compress(ctx, byteBuf);
         }
-        PacketSendEvent sendEvent = PacketEventsImplHelper.handleClientBoundPacket(ctx.channel(), user, player, out, true, false);
-        if (sendEvent.hasPostTasks()) {
-            queuedPostTasks.addAll(sendEvent.getPostTasks());
+
+        // So apparently, this is how ViaVersion hacks around bungeecord not supporting sending empty packets
+        if (!ByteBufHelper.isReadable(byteBuf)) {
+            throw CancelPacketException.INSTANCE;
         }
+
+        list.add(byteBuf.retain());
+    }
+
+    private PacketSendEvent handleClientBoundPacket(Channel channel, User user, Object player, ByteBuf buffer, ChannelPromise promise) throws Exception {
+        PacketSendEvent packetSendEvent = PacketEventsImplHelper.handleClientBoundPacket(channel, user, player, buffer, true);
+        if (packetSendEvent.hasTasksAfterSend()) {
+            promise.addListener((p) -> {
+                for (Runnable task : packetSendEvent.getTasksAfterSend()) {
+                    task.run();
+                }
+            });
+        }
+        return packetSendEvent;
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        //This is netty code of the write method, and we are just "injecting" into it.
-        ByteBuf buf = null;
+        // We must restore the old promise (in case we are stacking promises such as sending packets on send event)
+        // If the old promise was successful, set it to null to avoid memory leaks.
+        ChannelPromise oldPromise = this.promise != null && !this.promise.isSuccess() ? this.promise : null;
+        promise.addListener(p -> this.promise = oldPromise);
+
+        this.promise = promise;
+        super.write(ctx, msg, promise);
+    }
+
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        // This is a terrible hack (to support bungee), I think we should use something other than a MessageToMessageEncoder
+        if (ExceptionUtil.isException(cause, CancelPacketException.class)) {
+            return;
+        }
+        // Ignore how mojang sends DISCONNECT packets in the wrong state
+        if (ExceptionUtil.isException(cause, InvalidDisconnectPacketSend.class)) {
+            return;
+        }
+
+        boolean didWeCauseThis = ExceptionUtil.isException(cause, PacketProcessException.class);
+
+        if (didWeCauseThis && user != null && user.getConnectionState() != ConnectionState.HANDSHAKING) {
+            // Ignore handshaking exceptions
+            cause.printStackTrace();
+            return;
+        }
+
+        super.exceptionCaught(ctx, cause);
+    }
+
+    private static Object paperCompressionEnabledEvent() {
         try {
-            if (this.acceptOutboundMessage(msg)) {
-                buf = this.allocateBuffer(ctx, msg, true);
-                try {
-                    this.encode(ctx, msg, buf);
-                } finally {
-                    ReferenceCountUtil.release(msg);
-                    //PacketEvents - Start
-                    //Now we added the post tasks to the queuedPostTasks list, so let us execute them after we send the packet.
-                    if (!queuedPostTasks.isEmpty()) {
-                        List<Runnable> tasks = new ArrayList<>(queuedPostTasks);
-                        queuedPostTasks.clear();
-                        promise.addListener(f -> {
-                            for (Runnable task : tasks) {
-                                task.run();
-                            }
-                        });
-                    }
-                    //PacketEvents - End
-                }
-                if (buf.isReadable()) {
-                    ctx.write(buf, promise);
-                } else {
-                    buf.release();
-                    // While we should write an empty buffer, various proxies and custom minecraft client
-                    // are unable to handle an empty buffer, and it will break them...
-                    //ctx.write(Unpooled.EMPTY_BUFFER, promise);
-                }
-                buf = null;
-            } else {
-                ctx.write(msg, promise);
+            final Class<?> eventClass = Class.forName("io.papermc.paper.network.ConnectionEvent");
+            return eventClass.getDeclaredField("COMPRESSION_THRESHOLD_SET").get(null);
+        } catch (final ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private void compress(ChannelHandlerContext ctx, ByteBuf input) throws InvocationTargetException {
+        ChannelHandler compressor = ctx.pipeline().get("compress");
+        ByteBuf temp = ctx.alloc().buffer();
+        try {
+            if (compressor != null) {
+                CustomPipelineUtil.callEncode(compressor, ctx, input, temp);
             }
-        } catch (EncoderException e) {
-            throw e;
-        } catch (Throwable e2) {
-            throw new EncoderException(e2);
         } finally {
-            if (buf != null) {
-                buf.release();
+            input.clear().writeBytes(temp);
+            temp.release();
+        }
+    }
+
+    private void decompress(ChannelHandlerContext ctx, ByteBuf input, ByteBuf output) throws InvocationTargetException {
+        ChannelHandler decompressor = ctx.pipeline().get("decompress");
+        if (decompressor != null) {
+            ByteBuf temp = (ByteBuf) CustomPipelineUtil.callDecode(decompressor, ctx, input).get(0);
+            try {
+                output.clear().writeBytes(temp);
+            } finally {
+                temp.release();
             }
         }
     }
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        super.exceptionCaught(ctx, cause);
-        //Check if the minecraft server will already print our exception for us.
-        //Don't print errors during handshake
-        if (ExceptionUtil.isException(cause, PacketProcessException.class)
-                && !SpigotReflectionUtil.isMinecraftServerInstanceDebugging()
-                && (user != null && user.getConnectionState() != ConnectionState.HANDSHAKING)) {
-            cause.printStackTrace();
+    private boolean handleCompression(ChannelHandlerContext ctx, ByteBuf buffer) throws InvocationTargetException {
+        if (handledCompression) return false;
+        int compressIndex = ctx.pipeline().names().indexOf("compress");
+        if (compressIndex == -1) return false;
+        handledCompression = true;
+        int peEncoderIndex = ctx.pipeline().names().indexOf(PacketEvents.ENCODER_NAME);
+        if (peEncoderIndex == -1) return false;
+        if (compressIndex > peEncoderIndex) {
+            //We are ahead of the decompression handler (they are added dynamically) so let us relocate.
+            //But first we need to compress the data and re-compress it after we do all our processing to avoid issues.
+            decompress(ctx, buffer, buffer);
+            //Let us relocate and no longer deal with compression.
+            PacketEventsDecoder decoder = (PacketEventsDecoder) ctx.pipeline().get(PacketEvents.DECODER_NAME);
+            ServerConnectionInitializer.relocateHandlers(ctx.channel(), decoder, user);
+            return true;
         }
+        return false;
     }
 }

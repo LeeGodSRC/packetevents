@@ -42,6 +42,7 @@ public enum StateValue {
     DISTANCE("distance", Integer::parseInt),
     DOWN("down", Boolean::parseBoolean),
     DRAG("drag", Boolean::parseBoolean),
+    DUSTED("dusted", Integer::parseInt),
     EAST("east", East::valueOf),
     EGGS("eggs", Integer::parseInt),
     ENABLED("enabled", Boolean::parseBoolean),
@@ -49,6 +50,7 @@ public enum StateValue {
     EYE("eye", Boolean::parseBoolean),
     FACE("face", Face::valueOf),
     FACING("facing", BlockFace::valueOf),
+    FLOWER_AMOUNT("flower_amount", Integer::parseInt),
     HALF("half", Half::valueOf),
     HANGING("hanging", Boolean::parseBoolean),
     HAS_BOOK("has_book", Boolean::parseBoolean),
@@ -85,6 +87,12 @@ public enum StateValue {
     SHORT("short", Boolean::parseBoolean),
     SHRIEKING("shrieking", Boolean::parseBoolean),
     SIGNAL_FIRE("signal_fire", Boolean::parseBoolean),
+    SLOT_0_OCCUPIED("slot_0_occupied", Boolean::parseBoolean),
+    SLOT_1_OCCUPIED("slot_1_occupied", Boolean::parseBoolean),
+    SLOT_2_OCCUPIED("slot_2_occupied", Boolean::parseBoolean),
+    SLOT_3_OCCUPIED("slot_3_occupied", Boolean::parseBoolean),
+    SLOT_4_OCCUPIED("slot_4_occupied", Boolean::parseBoolean),
+    SLOT_5_OCCUPIED("slot_5_occupied", Boolean::parseBoolean),
     SNOWY("snowy", Boolean::parseBoolean),
     STAGE("stage", Integer::parseInt),
     SOUTH("south", South::valueOf),
@@ -96,7 +104,8 @@ public enum StateValue {
     UP("up", Boolean::parseBoolean),
     VERTICAL_DIRECTION("vertical_direction", VerticalDirection::valueOf),
     WATERLOGGED("waterlogged", Boolean::parseBoolean),
-    WEST("west", West::valueOf);
+    WEST("west", West::valueOf),
+    CRACKED("cracked", Boolean::parseBoolean);
 
     private final String name;
     private final Function<String, Object> parser;

@@ -21,6 +21,7 @@ package com.github.retrooper.packetevents.protocol.entity.data;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.manager.server.ServerVersion;
 import com.github.retrooper.packetevents.protocol.entity.pose.EntityPose;
+import com.github.retrooper.packetevents.protocol.entity.sniffer.SnifferState;
 import com.github.retrooper.packetevents.protocol.entity.villager.VillagerData;
 import com.github.retrooper.packetevents.protocol.item.ItemStack;
 import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
@@ -31,12 +32,8 @@ import com.github.retrooper.packetevents.protocol.player.ClientVersion;
 import com.github.retrooper.packetevents.protocol.world.BlockFace;
 import com.github.retrooper.packetevents.protocol.world.WorldBlockPosition;
 import com.github.retrooper.packetevents.resources.ResourceLocation;
-import com.github.retrooper.packetevents.util.TypesBuilder;
-import com.github.retrooper.packetevents.util.TypesBuilderData;
-import com.github.retrooper.packetevents.util.Vector3f;
-import com.github.retrooper.packetevents.util.Vector3i;
+import com.github.retrooper.packetevents.util.*;
 import com.github.retrooper.packetevents.wrapper.PacketWrapper;
-import net.kyori.adventure.text.Component;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -59,7 +56,9 @@ public class EntityDataTypes {
             ClientVersion.V_1_11,
             ClientVersion.V_1_13,
             ClientVersion.V_1_14,
-            ClientVersion.V_1_19);
+            ClientVersion.V_1_19,
+            ClientVersion.V_1_19_3,
+            ClientVersion.V_1_19_4);
 
     public static final EntityDataType<Byte> BYTE = define("byte", PacketWrapper::readByte, PacketWrapper::writeByte);
 
@@ -79,13 +78,15 @@ public class EntityDataTypes {
         }
     });
 
+    public static final EntityDataType<Long> LONG = define("long", PacketWrapper::readVarLong, PacketWrapper::writeVarLong);
+
     public static final EntityDataType<Float> FLOAT = define("float", PacketWrapper::readFloat, PacketWrapper::writeFloat);
 
     public static final EntityDataType<String> STRING = define("string", PacketWrapper::readString, PacketWrapper::writeString);
 
-    public static final EntityDataType<Component> COMPONENT = define("component", PacketWrapper::readComponent, PacketWrapper::writeComponent);
+    public static final EntityDataType<String> COMPONENT = define("component", PacketWrapper::readComponentJSON, PacketWrapper::writeComponentJSON);
 
-    public static final EntityDataType<Optional<Component>> OPTIONAL_COMPONENT = define("optional_component", readOptionalComponentDeserializer(), writeOptionalComponentSerializer());
+    public static final EntityDataType<Optional<String>> OPTIONAL_COMPONENT = define("optional_component", readOptionalComponentDeserializer(), writeOptionalComponentSerializer());
 
     public static final EntityDataType<ItemStack> ITEMSTACK = define("itemstack", PacketWrapper::readItemStack, PacketWrapper::writeItemStack);
 
@@ -136,6 +137,9 @@ public class EntityDataTypes {
             (PacketWrapper<?> wrapper, Optional<UUID> value) ->
                     wrapper.writeOptional(value.orElse(null), PacketWrapper::writeUUID));
 
+    public static final EntityDataType<Integer> BLOCK_STATE = define("block_state",
+            readIntDeserializer(), writeIntSerializer());
+
     public static final EntityDataType<Integer> OPTIONAL_BLOCK_STATE = define("optional_block_state", readIntDeserializer(), writeIntSerializer());
 
     public static final EntityDataType<NBTCompound> NBT = define("nbt", PacketWrapper::readNBT, PacketWrapper::writeNBT);
@@ -175,6 +179,29 @@ public class EntityDataTypes {
             }));
 
     public static final EntityDataType<Integer> PAINTING_VARIANT_TYPE = define("painting_variant_type", readIntDeserializer(), writeIntSerializer());
+
+    public static final EntityDataType<SnifferState> SNIFFER_STATE = define("sniffer_state", (PacketWrapper<?> wrapper) -> {
+        int id = wrapper.readVarInt();
+        return SnifferState.values()[id];
+    }, (PacketWrapper<?> wrapper, SnifferState value) -> wrapper.writeVarInt(value.ordinal()));
+
+
+    public static final EntityDataType<Vector3f> VECTOR3F = define("vector3f",
+            (PacketWrapper<?> wrapper) -> new Vector3f(wrapper.readFloat(), wrapper.readFloat(), wrapper.readFloat()),
+            (PacketWrapper<?> wrapper, Vector3f value) -> {
+                wrapper.writeFloat(value.x);
+                wrapper.writeFloat(value.y);
+                wrapper.writeFloat(value.z);
+            });
+
+    public static final EntityDataType<Quaternion4f> QUATERNION = define("quaternion",
+            (PacketWrapper<?> wrapper) -> new Quaternion4f(wrapper.readFloat(), wrapper.readFloat(), wrapper.readFloat(), wrapper.readFloat()),
+            (PacketWrapper<?> wrapper, Quaternion4f value) -> {
+                wrapper.writeFloat(value.getX());
+                wrapper.writeFloat(value.getY());
+                wrapper.writeFloat(value.getZ());
+                wrapper.writeFloat(value.getW());
+            });
 
     public static EntityDataType<?> getById(ClientVersion version, int id) {
         int index = TYPES_BUILDER.getDataIndex(version);
@@ -232,7 +259,7 @@ public class EntityDataTypes {
     private static <T> Function<PacketWrapper<?>, T> readOptionalComponentDeserializer() {
         return (PacketWrapper<?> wrapper) -> {
             if (wrapper.readBoolean()) {
-                return (T) Optional.of(wrapper.readComponent());
+                return (T) Optional.of(wrapper.readString());
             } else {
                 return (T) Optional.empty();
             }
@@ -242,10 +269,10 @@ public class EntityDataTypes {
     private static <T> BiConsumer<PacketWrapper<?>, T> writeOptionalComponentSerializer() {
         return (PacketWrapper<?> wrapper, T value) -> {
             if (value instanceof Optional) {
-                Optional<Component> optional = (Optional<Component>) value;
+                Optional<String> optional = (Optional<String>) value;
                 if (optional.isPresent()) {
                     wrapper.writeBoolean(true);
-                    wrapper.writeComponent(optional.get());
+                    wrapper.writeString(optional.get());
                 } else {
                     wrapper.writeBoolean(false);
                 }

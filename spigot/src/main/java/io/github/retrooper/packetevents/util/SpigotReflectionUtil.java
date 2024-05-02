@@ -56,7 +56,7 @@ public final class SpigotReflectionUtil {
     //Example: net.minecraft.server.v1_8_R3.
     public static final String LEGACY_NMS_PACKAGE = "net.minecraft.server." + MODIFIED_PACKAGE_NAME + ".";
     //Example: org.bukkit.craftbukkit.v1_8_R3.
-    public static final String OBC_PACKAGE = "org.bukkit.craftbukkit." + MODIFIED_PACKAGE_NAME + ".";
+    public static final String OBC_PACKAGE = Bukkit.getServer().getClass().getPackage().getName() + ".";
     public static ServerVersion VERSION;
     //Booleans
     public static boolean V_1_19_OR_HIGHER;
